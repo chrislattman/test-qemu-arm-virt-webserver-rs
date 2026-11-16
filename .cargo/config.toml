@@ -1,0 +1,18 @@
+[build]
+# softfloat: never use the FP/SIMD registers (the FPU is off at EL1, and
+# irq_entry doesn't save them), like -mgeneral-regs-only in C
+target = "aarch64-unknown-none-softfloat"
+
+[target.aarch64-unknown-none-softfloat]
+# User-mode networking (no root needed): QEMU runs a DHCP server that gives the
+# guest 10.0.2.15, and forwards host port 8080 to guest port 8080. The
+# virtio-mmio transport defaults to legacy (version 1), which is what
+# virtio_net.rs drives; force-legacy=true just makes that explicit.
+# Cargo appends the ELF path to the runner, so -kernel goes last.
+# In another shell: telnet localhost 5678, then browse to http://localhost:8080
+# Quit qemu: (qemu) quit
+# Quit telnet: Ctrl + ] -> telnet> quit
+runner = ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a53", "-m", "128M", "-nographic", "-serial", "telnet:localhost:5678,server=on,wait=off", "-global", "virtio-mmio.force-legacy=true", "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:8080-:8080", "-device", "virtio-net-device,netdev=net0", "-kernel"]
+
+[alias]
+qemu = ["run", "--release"]

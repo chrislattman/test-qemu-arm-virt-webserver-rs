@@ -28,7 +28,7 @@ Then browse to http://localhost:8080, or run `curl http://localhost:8080`. QEMU'
 |---|---|
 | `startup.S` | Also turns on the MMU (see below). Its constants are `.set` rather than `#define`, since `global_asm!` doesn't run the C preprocessor |
 | `linker.ld` | 256KB stack (was 16KB) |
-| `platform.rs` | New: the executor's run loop, the critical-section implementation, interrupt dispatch, fault and panic handlers |
+| `platform.rs` | New: the executor's run loop, interrupt dispatch, fault and panic handlers |
 | `timer.rs` | New: embassy-time driver on the EL1 physical generic timer |
 | `gic.rs` | A minimal GICv2 driver of its own, in place of the `arm-gic` crate |
 | `virtio_net.rs` | New: virtio-net driver (legacy virtio-mmio interface) implementing `embassy_net_driver::Driver` |
@@ -41,7 +41,7 @@ The Pico version gets its executor platform, time driver and critical sections f
 
 - **Executor:** `platform::run` drives embassy's `raw::Executor`. Its `__pender` sets a flag; the loop polls tasks, then sleeps with `wfi` unless the flag is set. IRQs are masked while checking the flag, so an interrupt in between can't be missed.
 - **Time driver:** `timer.rs` implements `embassy_time_driver::Driver` with the generic timer. It uses `embassy-time-queue-utils` for the timer queue, and converts between embassy's 1MHz ticks and the timer's frequency (`CNTFRQ_EL0`, 62.5MHz on QEMU), which is only known at run time.
-- **Critical sections:** masking IRQs is enough on a single core (`platform.rs`).
+- **Critical sections:** masking interrupts is enough on a single core, so this uses the [`aarch64-cpu`](https://docs.rs/aarch64-cpu) crate's `critical-section-single-core` feature. System registers, barriers and `wfi` also go through `aarch64-cpu` rather than inline `asm!`.
 - **Network driver:** `virtio_net.rs` implements `embassy_net_driver::Driver`. Its RX and TX tokens hand smoltcp the virtio buffers themselves, so unlike the C version nothing is copied. The device interrupt just wakes embassy-net's runner task.
 
 Interrupt handlers never run tasks: they acknowledge the device and wake a waker, and tasks run in the executor's loop. So handlers don't nest, and, as in test-qemu-arm-virt-rs, `irq_entry` only saves the registers a Rust function can clobber.

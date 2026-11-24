@@ -8,7 +8,8 @@ name = "baremetal"
 path = "main.rs"
 
 [dependencies]
-critical-section = { version = "1.2.0", features = ["restore-state-u64"] }
+aarch64-cpu = { version = "12.0.0", features = ["critical-section-single-core"] }
+critical-section = "1.2.0"
 embassy-executor = "0.10.0"
 embassy-net = { version = "0.9.1", features = ["tcp", "dhcpv4", "medium-ethernet", "proto-ipv4"] }
 embassy-net-driver = "0.2.0"

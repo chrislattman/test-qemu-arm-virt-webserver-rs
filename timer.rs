@@ -4,11 +4,12 @@
 //! timer's frequency is only known at run time (CNTFRQ_EL0: 62.5MHz on QEMU's
 //! Cortex-A53), so times are converted between the two.
 
-use core::arch::asm;
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::Waker;
 
+use aarch64_cpu::asm::barrier;
+use aarch64_cpu::registers::{CNTFRQ_EL0, CNTP_CTL_EL0, CNTP_CVAL_EL0, CNTPCT_EL0, Read, Write};
 use critical_section::{CriticalSection, Mutex};
 use embassy_time_driver::{Driver, TICK_HZ};
 use embassy_time_queue_utils::Queue;
@@ -27,15 +28,11 @@ embassy_time_driver::time_driver_impl!(static DRIVER: GenericTimer = GenericTime
 });
 
 fn counter() -> u64 {
-    let count: u64;
-    unsafe { asm!("mrs {}, cntpct_el0", out(reg) count, options(nomem, nostack)) };
-    count
+    CNTPCT_EL0.get()
 }
 
 pub fn init() {
-    let frequency: u64;
-    unsafe { asm!("mrs {}, cntfrq_el0", out(reg) frequency, options(nomem, nostack)) };
-    DRIVER.frequency.store(frequency, Ordering::Relaxed);
+    DRIVER.frequency.store(CNTFRQ_EL0.get(), Ordering::Relaxed);
     gic::enable(IRQ_EL1_PHYS_TIMER);
 }
 
@@ -50,17 +47,15 @@ impl GenericTimer {
     /// handles expired timers again instead).
     fn set_alarm(&self, _cs: CriticalSection, at: u64) -> bool {
         if at == u64::MAX {
-            unsafe { asm!("msr cntp_ctl_el0, {}", in(reg) 0u64, options(nomem, nostack)) }; // Disable
+            CNTP_CTL_EL0.write(CNTP_CTL_EL0::ENABLE::CLEAR);
             return true;
         }
         let frequency = self.frequency.load(Ordering::Relaxed) as u128;
         // Round up, so the interrupt doesn't fire just before `at`
         let cval = (at as u128 * frequency).div_ceil(TICK_HZ as u128).min(u64::MAX as u128) as u64;
-        unsafe {
-            asm!("msr cntp_cval_el0, {}", in(reg) cval, options(nomem, nostack));
-            asm!("msr cntp_ctl_el0, {}", in(reg) 1u64, options(nomem, nostack)); // ENABLE=1, IMASK=0
-            asm!("isb", options(nomem, nostack));
-        }
+        CNTP_CVAL_EL0.set(cval);
+        CNTP_CTL_EL0.write(CNTP_CTL_EL0::ENABLE::SET + CNTP_CTL_EL0::IMASK::CLEAR);
+        barrier::isb(barrier::SY);
         at > self.now()
     }
 

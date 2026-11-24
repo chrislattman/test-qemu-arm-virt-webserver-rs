@@ -1,6 +1,5 @@
 //! virtio-net driver for the legacy (version 1) virtio-mmio interface, as an
-//! embassy-net driver. The same file is used by the Arm and RISC-V versions;
-//! only `virt.rs` (addresses) and the memory barrier differ.
+//! embassy-net driver.
 //!
 //! References:
 //! - Virtio spec v1.2, sections 2.7 (split virtqueues), 4.2.4 (legacy MMIO
@@ -12,8 +11,8 @@
 //! `-global virtio-mmio.force-legacy=false`.
 //!
 //! The rings and buffers live in one static block. Addresses are physical
-//! (the Arm MMU identity-maps RAM; RISC-V machine mode has no translation), and
-//! QEMU's DMA is cache-coherent, so no cache maintenance is needed.
+//! (the MMU identity-maps RAM), and QEMU's DMA is cache-coherent, so no cache
+//! maintenance is needed.
 //!
 //! Unlike the C version, there's no copying in or out of the virtio buffers:
 //! embassy-net's tokens hand smoltcp the buffer itself.
@@ -22,6 +21,7 @@ use core::ptr::{addr_of, addr_of_mut};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::Context;
 
+use aarch64_cpu::asm::barrier;
 use embassy_net_driver::{Capabilities, HardwareAddress, LinkState};
 use embassy_sync::waitqueue::AtomicWaker;
 use static_cell::ConstStaticCell;
@@ -144,16 +144,9 @@ fn reg_write(base: usize, offset: usize, value: u32) {
 
 /// Orders ring writes before the device can see them (or an MMIO notify), and
 /// used ring index reads before the entries they cover. Also a compiler
-/// barrier, since the asm may touch memory.
+/// barrier, since aarch64-cpu's DSB asm may touch memory.
 fn mb() {
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        core::arch::asm!("dsb sy", options(nostack, preserves_flags));
-    }
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        core::arch::asm!("fence iorw, iorw", options(nostack, preserves_flags));
-    }
+    barrier::dsb(barrier::SY);
 }
 
 /// The device's index into the used ring, which it updates behind our back

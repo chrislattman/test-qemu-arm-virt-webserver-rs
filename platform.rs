@@ -1,9 +1,13 @@
-//! Runtime support: the embassy executor's run loop, the critical-section
-//! implementation, interrupt dispatch, and the fault and panic handlers.
+//! Runtime support: the embassy executor's run loop, interrupt dispatch, and
+//! the fault and panic handlers. Critical sections come from aarch64-cpu's
+//! `critical-section-single-core` feature: on a single core, masking
+//! interrupts (DAIF) makes a section exclusive.
 
-use core::arch::asm;
 use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering, compiler_fence};
+
+use aarch64_cpu::asm::wfi;
+use aarch64_cpu::registers::{DAIFClr, DAIFSet, Write};
 
 use embassy_executor::{Spawner, raw};
 use static_cell::StaticCell;
@@ -41,32 +45,21 @@ pub fn run(init: impl FnOnce(Spawner)) -> ! {
         // checking, so a wake-up between the check and the WFI can't be
         // missed: a pending interrupt ends WFI even while masked, and is then
         // taken when IRQs are unmasked.
-        unsafe { asm!("msr daifset, #2", options(nostack)) };
+        // aarch64-cpu's register accesses aren't compiler barriers, so fences
+        // keep the check between them.
+        mask_irqs();
         if !SIGNAL.swap(false, Ordering::Acquire) {
-            unsafe { asm!("wfi", options(nomem, nostack)) };
+            wfi();
         }
-        unsafe { asm!("msr daifclr, #2", options(nostack)) };
+        compiler_fence(Ordering::SeqCst);
+        DAIFClr.write(DAIFClr::I::SET);
     }
 }
 
-// --- Critical sections (used by embassy) ---
-// Single core: masking IRQs makes a section exclusive. The previous DAIF value
-// is restored on release, so sections nest and work inside interrupt handlers.
-
-struct SingleCoreCriticalSection;
-critical_section::set_impl!(SingleCoreCriticalSection);
-
-unsafe impl critical_section::Impl for SingleCoreCriticalSection {
-    unsafe fn acquire() -> u64 {
-        let daif: u64;
-        // No `nomem` option, so these also act as compiler memory barriers
-        unsafe { asm!("mrs {}, daif", "msr daifset, #2", out(reg) daif, options(nostack)) };
-        daif
-    }
-
-    unsafe fn release(daif: u64) {
-        unsafe { asm!("msr daif, {}", in(reg) daif, options(nostack)) };
-    }
+/// Masks IRQs (also a compiler barrier)
+fn mask_irqs() {
+    DAIFSet.write(DAIFSet::I::SET);
+    compiler_fence(Ordering::SeqCst);
 }
 
 // --- Interrupts ---
@@ -106,13 +99,14 @@ extern "C" fn handle_fault(kind: u64, esr: u64, elr: u64, far: u64) -> ! {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    unsafe { asm!("msr daifset, #2", options(nostack)) };
+    mask_irqs();
     println!("\n*** {info}");
     halt()
 }
 
 fn halt() -> ! {
     loop {
-        unsafe { asm!("msr daifset, #2", "wfi", options(nomem, nostack)) };
+        mask_irqs();
+        wfi();
     }
 }
